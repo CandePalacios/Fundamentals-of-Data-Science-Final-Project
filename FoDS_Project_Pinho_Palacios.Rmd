@@ -1,0 +1,880 @@
+---
+title: "Fundamentals of Data Science"
+subtitle: "Project - Breast Cancer"
+author: "Alícia Pinho Santos and Candela Palacios"
+date: "July 10, 2022"
+fontsize: 10pt
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = F, 
+                      results = 'all', 
+                      message = FALSE, 
+                      warning = F, 
+                      cache = FALSE, 
+                      error = TRUE)
+```
+
+```{r , include = FALSE}
+rm(list = ls())  
+getwd()
+setwd("C:/Users/Candela/OneDrive - UBA/FACULTAD/2022/FoDS/Project")
+#install.packages("pacman", repos = "http://cran.us.r-project.org")
+library(pacman)
+p_load(ggplot2,   
+       cowplot,   
+       stargazer, 
+       glmnet,    
+       pROC,     
+       caret,       
+       rpart,        
+       rpart.plot)
+breast_cancer<-read.csv("C:/Users/Candela/OneDrive - UBA/FACULTAD/2022/FoDS/Project/breast_cancer.csv")
+
+Accuracy <- function(pred, real, threshold = 0.5){
+  predClass <-  ifelse(pred > threshold, 1, 0)
+  acc <- sum(predClass == real) / length(real)
+  return(acc)
+}
+
+zScores <- function(var){
+    mu <- mean(var)
+    sd <-  sd(var)
+    scores <- (var - mu)/sd
+    return(scores)
+}
+```
+In this project, we worked with the Breast Cancer dataset, in which there are 33 **variables**. Aside from the first two, the rest of variables displays different measures of observed **parameters** on tumorous cells in breasts. Our objective was to predict a binary variable **"diagnosis"**, which can take values "M" for malign, or "B" for bening tumors. We predicted the probability of tumour cells being maling or bening by creating models using different combinations of the most influential variables. All variables, except *diagnosis*, are continuous.
+
+**Variable**          |**Description**                      |
+----------------------|-------------------------------------|
+ID                    | Unique ID                           |
+**diagnosis**         | **Target: M - Malignant B - Benign**|
+radius_mean           | Radius of Lobes                     |
+texture_mean          | Mean of Surface Texture             |  
+perimeter_mean        | Outer Perimeter of Lobes            |    
+area_mean             | Mean Area of Lobes                  |  
+smoothness_mean       | Mean of Smoothness Levels           |
+compactness_mean      | Mean of Compactness                 |  
+concavity_mean        | Mean of Concavity                   |
+concave points_mean   | Mean of Concave Points              |  
+symmetry_mean         | Mean of Symmetry                    |    
+fractal_dimension_mean| Mean of Fractal Dimension           |
+radius_se             | SE of Radius                        |
+texture_se            | SE of Texture                       |
+perimeter_se          | Perimeter of SE                     |  
+area_se               | Area of SE                          |  
+smoothness_se         | SE of Smoothness                    |
+compactness_se        | SE of compactness                   |
+concavity_se          | SE of concavity                     |  
+concave points_se     | SE of concave points                |    
+symmetry_se           | SE of symmetry                      |  
+fractal_dimension_se  | SE of Fractal Dimension             |  
+radius_worst          | Worst Radius                        |
+texture_worst         | Worst Texture                       |
+perimeter_worst       | Worst Permimeter                    |
+area_worst            | Worst Area                          |
+smoothness_worst      | Worst Smoothness                    |    
+compactness_worst     | Worse Compactness                   |
+concavity_worst       | Worst Concavity                     |  
+concave points_worst  | Worst Concave Points                |
+symmetry_worst        | Worst Symmetry                      |  
+fractal_dimension_worst| Worst Fractal Dimension            |
+
+# 1. Exploratory Data Analysis and Data Preparation
+
+#### Missing Values Treatment \
+
+After searching for missing values, we only found 13 rows that displayed zeros, a value these variables can not take in reality, on variables related to concavity and concave points. We decided to impute these zeros with the median.
+
+```{r Missing values, include = FALSE}
+apply(breast_cancer, 2, function(g) sum(g == ""))
+colSums(is.na(breast_cancer))
+colSums(breast_cancer == 0) 
+colSums(breast_cancer < 0)
+colSums(breast_cancer == -999)
+```
+
+
+```{r Missing values loop, echo=TRUE}
+zeros <- c("concavity_mean","concave.points_mean","concavity_se",  
+           "concave.points_se","concavity_worst","concave.points_worst")
+
+for (var in zeros) {
+  breast_cancer[[var]][breast_cancer[[var]] == "0"] <- 
+    median(breast_cancer[[var]], na.rm = T)
+}
+```
+
+#### Treatment of skewed distributions and outliers \
+Given the large amount of variables, we created the following loop that allowed us to quickly visualize density plots of every distribution.  
+
+```{r, eval=FALSE, echo=TRUE} 
+var_names <- c(colnames(breast_cancer))
+n = 3
+
+while(n <= ncol(breast_cancer)) {
+      print(ggplot(breast_cancer, aes(breast_cancer[,n])) +
+            geom_density(na.rm = T) +
+            labs(x = var_names[n]))
+  n = n+1
+}
+```
+
+```{r, include=FALSE} 
+var_names <- c(colnames(breast_cancer))
+n =3
+while(n <= ncol(breast_cancer)) {
+  print(ggplot(breast_cancer, aes(breast_cancer[,n])) +
+          geom_density(na.rm = T) +
+          labs(x = var_names[n]))
+  n = n+1
+}
+```
+After seeing the distributions, we decide what kind of treatment every variable requires and manually perform the treatment in separated chunks. Here we display an example.  
+
+```{r, include=FALSE}
+#radius_mean
+breast_cancer$radius_mean_ln<-log(breast_cancer$radius_mean)
+ggplot(breast_cancer, aes(radius_mean_ln)) +
+  geom_density()
+```
+``` {r, include=FALSE}
+#texture_mean
+z_texture_m<-zScores(breast_cancer$texture_mean)
+breast_cancer$texture_mean[z_texture_m > 3] <- mean(breast_cancer$texture_mean, na.rm=T) +
+                                        3*sd(breast_cancer$texture_mean)
+ggplot(breast_cancer, aes(texture_mean)) +
+  geom_density()
+```
+
+``` {r, include=FALSE}
+#perimeter_mean
+breast_cancer$perimeter_mean_ln<-log(breast_cancer$perimeter_mean)
+ggplot(breast_cancer, aes(perimeter_mean_ln)) +
+  geom_density()
+```
+
+``` {r, include=FALSE}
+#area_mean
+breast_cancer$area_mean_ln<-log(breast_cancer$area_mean)
+ggplot(breast_cancer, aes(area_mean_ln)) +
+  geom_density()
+```
+
+``` {r, include=FALSE}
+#smoothness_mean
+z_smooth_m<-zScores(breast_cancer$smoothness_mean)
+breast_cancer$smoothness_mean[z_smooth_m > 3] <- mean(breast_cancer$smoothness_mean, na.rm=T) +
+                                        3*sd(breast_cancer$smoothness_mean)
+ggplot(breast_cancer, aes(smoothness_mean)) +
+  geom_density()
+```
+
+``` {r, include=FALSE}
+#compactness_mean
+z_compact_m<-zScores(breast_cancer$compactness_mean)
+breast_cancer$compactness_mean[z_compact_m > 2] <- mean(breast_cancer$compactness_mean, na.rm=T) +
+                                        2*sd(breast_cancer$compactness_mean)
+ggplot(breast_cancer,aes(compactness_mean)) +
+  geom_density()
+
+#log makes it negative
+```
+
+``` {r, include=FALSE}
+#concavity mean 
+z_concavity_m<-zScores(breast_cancer$concavity_mean)
+breast_cancer$concavity_mean[z_concavity_m > 2] <- mean(breast_cancer$concavity_mean, na.rm=T) +
+                                        2*sd(breast_cancer$concavity_mean)
+ggplot(breast_cancer, aes(concavity_mean))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#concave points_mean
+z_conpoint_m<-zScores(breast_cancer$concave.points_mean)
+breast_cancer$concave.points_mean[z_conpoint_m > 2] <- mean(breast_cancer$concave.points_mean, na.rm=T) +
+                                        2*sd(breast_cancer$concave.points_mean)
+ggplot(breast_cancer, aes(concave.points_mean))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#symmetry_mean
+z_simmetry_m <-zScores(breast_cancer$simmetry_mean)
+breast_cancer$symmetry_mean[z_simmetry_m > 3] <- mean(breast_cancer$symmetry_mean, na.rm=T) +
+                                        3*sd(breast_cancer$symmetry_mean)
+ggplot(breast_cancer, aes(symmetry_mean))+
+  geom_density()
+```
+
+``` {r, include=FALSE}                                       
+#fractal_dimension_mean
+z_fractdim_m <-zScores(breast_cancer$fractal_dimension_mean)
+breast_cancer$fractal_dimension_mean[z_fractdim_m > 3] <- mean(breast_cancer$fractal_dimension_mean, na.rm=T) +
+                                        3*sd(breast_cancer$fractal_dimension_mean)
+ggplot(breast_cancer, aes(fractal_dimension_mean))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#radius_se
+z_radius_se <-zScores(breast_cancer$radius_se)
+breast_cancer$radius_se[z_radius_se > 2] <- mean(breast_cancer$radius_se, na.rm=T) +
+                                        2*sd(breast_cancer$radius_se)
+ggplot(breast_cancer, aes(radius_se))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#texture_se
+z_text_se <-zScores(breast_cancer$texture_se)
+breast_cancer$texture_se[z_text_se > 3] <- mean(breast_cancer$texture_se, na.rm=T) +
+                                        3*sd(breast_cancer$texture_se)
+ggplot(breast_cancer, aes(texture_se))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#perimeter_se
+z_perim_se <-zScores(breast_cancer$perimeter_se)
+breast_cancer$perimeter_se[z_radius_se > 3] <- mean(breast_cancer$perimeter_se, na.rm=T) +
+                                        3*sd(breast_cancer$perimeter_se)
+breast_cancer$perimeter_se_ln<-log(breast_cancer$perimeter_se)
+ggplot(breast_cancer,aes(perimeter_se_ln))+
+  geom_density()
+```
+
+``` {r, echo=TRUE}
+#area_se
+z_area_se<-zScores(breast_cancer$area_se)
+breast_cancer$area_se[z_area_se > 3] <- mean(breast_cancer$area_se, na.rm=T) +
+                                        3*sd(breast_cancer$area_se)
+breast_cancer$area_se_ln<-log(breast_cancer$area_se)
+```
+
+``` {r, include=FALSE}
+#smoothness_se
+z_smooth_se <-zScores(breast_cancer$smoothness_se)
+breast_cancer$smoothness_se[z_smooth_se > 3] <- mean(breast_cancer$smoothness_se, na.rm=T) +
+                                        3*sd(breast_cancer$smoothness_se)
+ggplot(breast_cancer, aes(smoothness_se))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#compactness_se
+z_compact_se <-zScores(breast_cancer$compactness_se)
+breast_cancer$compactness_se[z_compact_se > 2] <- mean(breast_cancer$compactness_se, na.rm=T) +
+                                        2*sd(breast_cancer$compactness_se)
+ggplot(breast_cancer, aes(compactness_se))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#concavity_se
+z_concavity_se <-zScores(breast_cancer$concavity_se)
+breast_cancer$concavity_se[z_concavity_se > 2] <- mean(breast_cancer$concavity_se, na.rm=T) +
+                                        2*sd(breast_cancer$concavity_se)
+ggplot(breast_cancer, aes(concavity_se))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#concave.points_se
+z_conpoint_se<-zScores(breast_cancer$concave.points_se)
+breast_cancer$concave.points_se[z_conpoint_se > 3] <- mean(breast_cancer$concave.points_se, na.rm=T) +
+                                        3*sd(breast_cancer$concave.points_se)
+ggplot(breast_cancer,aes(concave.points_se))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#simmetry_se
+z_simmetry_se<-zScores(breast_cancer$symmetry_se)
+breast_cancer$symmetry_se[z_simmetry_se > 2] <- mean(breast_cancer$symmetry_se, na.rm=T) +
+                                        2*sd(breast_cancer$symmetry_se)
+ggplot(breast_cancer,aes(symmetry_se))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#fractal_dimension_se
+z_fractdim_se<-zScores(breast_cancer$fractal_dimension_se)
+breast_cancer$fractal_dimension_se[z_fractdim_se > 2] <- mean(breast_cancer$fractal_dimension_se, na.rm=T) +
+                                        2*sd(breast_cancer$fractal_dimension_se)
+ggplot(breast_cancer,aes(fractal_dimension_se))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#radius_worst
+breast_cancer$radius_worst_ln<-log(breast_cancer$radius_worst)
+ggplot(breast_cancer,aes(radius_worst_ln)) +
+  geom_density()
+```
+
+``` {r, include=FALSE}
+#texture_worst
+z_texture_w<-zScores(breast_cancer$texture_worst)
+breast_cancer$texture_worst[z_texture_w > 3] <- mean(breast_cancer$texture_worst, na.rm=T) +
+                                        3*sd(breast_cancer$texture_worst)
+ggplot(breast_cancer,aes(texture_worst)) +
+  geom_density()
+```
+
+``` {r, include=FALSE}
+#perimeter_worst
+breast_cancer$perimeter_worst_ln<-log(breast_cancer$perimeter_worst)
+ggplot(breast_cancer,aes(perimeter_worst_ln)) +
+  geom_density()
+```
+
+``` {r, include=FALSE}
+#area_worst
+breast_cancer$area_worst_ln<-log(breast_cancer$area_worst)
+ggplot(breast_cancer,aes(area_worst_ln))+
+  geom_density()
+```
+
+``` {r, include=FALSE}
+#smoothness_worst
+z_smooth_w<-zScores(breast_cancer$smoothness_worst)
+breast_cancer$smoothness_worst[z_smooth_w > 3] <- mean(breast_cancer$smoothness_worst, na.rm=T) +
+                                        3*sd(breast_cancer$smoothness_worst)
+ggplot(breast_cancer,aes(smoothness_worst))+
+  geom_density()
+```
+
+``` {r, include=FALSE}
+#compactness_worst
+z_compacth_w<-zScores(breast_cancer$compactness_worst)
+breast_cancer$compactness_worst[z_compacth_w > 2] <- mean(breast_cancer$compactness_worst, na.rm=T) +
+                                        2*sd(breast_cancer$smoothness_worst)
+ggplot(breast_cancer,aes(compactness_worst))+
+  geom_density()
+#log makes negative
+```
+``` {r, include=FALSE}
+#concavity_worst
+z_concavity_w<-zScores(breast_cancer$concavity_worst)
+breast_cancer$concavity_worst[z_concavity_w > 2] <- mean(breast_cancer$concavity_worst, na.rm=T) +
+                                        2*sd(breast_cancer$concavity_worst)
+ggplot(breast_cancer,aes(concavity_worst))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#concave.points_worst
+z_conpoint_w<-zScores(breast_cancer$concave.points_worst)
+breast_cancer$concave.points_worst[z_conpoint_w > 3] <- mean(breast_cancer$concave.points_worst, na.rm=T) +
+                                        3*sd(breast_cancer$concave.points_worst)
+ggplot(breast_cancer,aes(concave.points_worst))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#symmetry_worst
+z_sym_w<-zScores(breast_cancer$symmetry_worst)
+breast_cancer$symmetry_worst[z_sym_w > 3] <- mean(breast_cancer$symmetry_worst, na.rm=T) +
+                                        3*sd(breast_cancer$symmetry_worst)
+ggplot(breast_cancer,aes(symmetry_worst))+
+  geom_density()
+#log makes negative
+```
+
+``` {r, include=FALSE}
+#fractal_dimension_worst
+z_fractdim_w<-zScores(breast_cancer$fractal_dimension_worst)
+breast_cancer$fractal_dimension_worst[z_fractdim_w > 2.5] <- mean(breast_cancer$fractal_dimension_worst, na.rm=T) +
+                                        2.5*sd(breast_cancer$fractal_dimension_worst)
+ggplot(breast_cancer,aes(fractal_dimension_worst))+
+  geom_density()
+#log makes negative
+```
+
+```{r}
+plotbefore <- ggplot(breast_cancer, aes(breast_cancer$area_se)) +
+          geom_density( na.rm = T) +
+          scale_color_brewer(palette = "Set1") +
+          labs(x = "area_se")
+
+plotafter <- ggplot(breast_cancer, aes(breast_cancer$area_se_ln)) +
+          geom_density( na.rm = T) +
+          labs(x = "area_se_ln")
+
+plot_row2<-plot_grid(plotbefore, plotafter, ncol = 2)
+title <- ggdraw() + 
+  draw_label(
+    "Comparison of variable area_se before and after treatment",
+    fontface = 'bold',
+    x = 0,
+    hjust = 0
+  ) +
+  theme(
+    plot.margin = margin(0, 0, 0, 7)
+  )
+plot_grid(title,plot_row2,ncol = 1,rel_heights = c(0.1, 1))
+```
+As it can be seen, the transformed variable does not have normal shape. This was one of the biggest problems we encountered in this data set, because many distributions had this bimodal shape, that we were not used to work with. After searching for a way to treat this type of distribution, we decided not to transform them further, because we understand that it does not affect the modelling process significantly.  
+
+#### Analyzing the relationships in the data \  
+After the transformations, we focused on understanding the way the different variables influentiate the target variable _diagnosis_. For this objective, we created a loop that plots density lines for each variable by the two levels of _diagnosis_, malign and bening.  
+
+```{r Relationships in the data, eval=FALSE, echo=TRUE}
+var_names <- c(colnames(breast_cancer))
+n = 3
+while (n <= ncol(breast_cancer)) {
+  print(ggplot(breast_cancer, aes(breast_cancer[,n], colour = diagnosis, fill = diagnosis)) +
+          geom_density( na.rm = T,
+                 alpha = 0.5) +
+          scale_color_brewer(palette = "Set1") +
+          scale_fill_brewer(palette = "Set1") +
+          labs(x = var_names[n]))
+  n = n+1
+}
+```
+
+```{r , include=FALSE}
+var_names <- c(colnames(breast_cancer))
+n = 3
+while (n <= ncol(breast_cancer)) {
+  print(ggplot(breast_cancer, aes(breast_cancer[,n], colour = diagnosis, fill = diagnosis)) +
+          geom_density( na.rm = T,
+                 alpha = 0.5) +
+          scale_color_brewer(palette = "Set1") +
+          scale_fill_brewer(palette = "Set1") +
+          labs(x = var_names[n]))
+  n = n+1
+}
+```
+
+```{r}
+plothigh <- ggplot(breast_cancer, aes(breast_cancer$area_worst_ln, colour = diagnosis, fill = diagnosis)) +
+          geom_density( na.rm = T,
+                 alpha = 0.5) +
+          scale_color_brewer(palette = "Set1") +
+          scale_fill_brewer(palette = "Set1") +
+          labs(x = "area_worst_ln: 
+               high influence - small shared area")
+plotlow <- ggplot(breast_cancer, aes(breast_cancer$texture_se, colour = diagnosis, fill = diagnosis)) +
+          geom_density( na.rm = T,
+                 alpha = 0.5) +
+          scale_color_brewer(palette = "Set1") +
+          scale_fill_brewer(palette = "Set1") +
+          labs(x = "texture_se: 
+               low influence - large shared area")
+
+plot_row<-plot_grid(plothigh, plotlow, ncol = 2)
+title <- ggdraw() + 
+  draw_label(
+    "Comparison of variables with high and low influence on diagnosis",
+    fontface = 'bold',
+    x = 0,
+    hjust = 0
+  ) +
+  theme(
+    plot.margin = margin(0, 0, 0, 7)
+  )
+plot_grid(title,plot_row,ncol = 1,rel_heights = c(0.1, 1))
+```
+Based on the observation of the plots, we manually choose which **variables** seem to have the highest influence on _diagnosis_ and built a table classifying them by *high*, **mid** and **low** influence.
+
+#### TABLE 1 - Influence by variable
+
+**High Influence**|**Mid influence**    |**Low influence**|
+------------------|---------------------|-----------------|
+radius_mean       |smoothness_mean      |texture_se       |
+perimeter_mean	  |compactness_se       |smoothness_se    |
+area_mean	        |concavity_se         |	symmetry_se     |
+compactness_mean	|concave points_se	  |fractal_dimension_se|
+concavity_mean	  |texture_worst	      |symmetry_mean    |
+concave points_mean	|smoothness_worst	  |fractal_dimension_mean|
+radius_se	        |symmetry_worst	      |
+perimeter_se	    |fractal_dimension_worst|	
+area_se	texture_mean|	
+radius_worst		  |
+perimeter_worst		|
+area_worst		    | 
+compactness_worst	|	
+concavity_worst		|
+concave points_worst|		
+
+
+Lastly, from this first table we created a second one, in which we classified the **parameters** on the type of influence they seem to have on *diagnosis*. **High** means all three variables of a parameter (mean, SE and worst), have visually high influence on diagnosis. **Mid** means two variables had high influence, and one did not, and **mid-low** means at least two variables were mid or low. These classifications help us choose predictors for the modelling process.
+
+#### TABLE 2 - Influence by parameter
+
+**Parameter**     |**Type of Influence** |   
+------------------|----------------------|
+**radius**        |**high**              |
+texture           |one variable in each cat.|
+**perimeter**	    |**high**              |
+**area**          |**high**               |	
+smoothness	      |mid-low                |
+*compactness*	    |*mid*                  |
+*concavity*       |*mid*                  |
+*concave.points*	|*mid*                  |
+fractal_dimension	|mid-low                |
+
+```{r}
+breast_cancer$diagnosis_n<-ifelse(breast_cancer$diagnosis == "M",1,0)
+```
+
+Summary: In this Exploratory Data Analysis: \
+
+* We have dealt with missing values by imputing them with the median. 
+* We have dealt with outliers using the zScore, and performed log-transformation on log-normally distributed continuous variables.
+* We created several plots, and based on these, classified the variables and parameters by their influence on _diagnosis_, as can be seen in **TABLE 1** and **TABLE 2**
+
+The new features are:
+
+- Log transformed variables: `radius_mean_ln`, `perimeter_mean_ln`,
+`area_mean_ln`, `perimeter_se_ln`, \
+`area_se_ln`,`radius_worst_ln`,`perimeter_worst_ln` and `area_worst_ln`.
+- For the modelling, it is necessary to create a new variable placeholder for our target variable "diagnosis", because it being a factor interferes with the process. We therefore created a numerical binary variable `diagnosis_n` in which 1 stands for malign tumor, and 0 for bening.
+
+# 2. Modelling 
+Because we need to model a binary variable, we choose to work with logistic regression. We also decide to work splitting the data on train and test sets so as to try to reduce model overfiting. For some models we will not show the whole building process, in order not be repetitive.
+
+#### Model 1:\
+For this first model, we chose from our EDA **the three variables that visually seem to influentiate the target variable the most**. 
+
+```{r MODEL - 1, echo=TRUE}
+set.seed(3)
+train.Index <-  sample(1:nrow(breast_cancer), round(0.7*nrow(breast_cancer)), replace = F)
+  breast_cancer.train <- breast_cancer[train.Index,]
+  breast_cancer.test  <- breast_cancer[-train.Index,]
+
+features <- c('radius_worst_ln', 'perimeter_worst_ln', 'area_worst_ln')
+
+model1<- glm(diagnosis_n ~ radius_worst_ln + perimeter_worst_ln +  area_worst_ln, 
+             data = breast_cancer.train[, c(features, "diagnosis_n")],
+               family = binomial(link = "logit"))
+
+# PREDICTION
+pred.model1 <- predict(model1, newdata = breast_cancer.test, type = "response") 
+```
+
+#### Model 2:\
+On this second model we chose to use **all the variables of the parameters** that scored **"high"** on our **TABLE 2** from the EDA.
+
+```{r, include=FALSE}
+set.seed(3)
+train.Index <-  sample(1:nrow(breast_cancer), round(0.7*nrow(breast_cancer)), replace = F)
+  breast_cancer.train <- breast_cancer[train.Index,]
+  breast_cancer.test  <- breast_cancer[-train.Index,]
+
+features <- c('radius_mean_ln', 'radius_se', 'radius_worst_ln', 
+              'perimeter_mean_ln', 'perimeter_se_ln', 'perimeter_worst_ln', 
+              'area_mean_ln', 'area_se_ln', 'area_worst_ln')
+
+model.matrix( ~ ., data = breast_cancer.train[, features])[1:10,]
+
+y.train <- breast_cancer.train$diagnosis_n
+y.test  <- breast_cancer.test$diagnosis_n
+
+X.train <- model.matrix( ~ . -1, data = breast_cancer.train[, features])
+X.test  <- model.matrix( ~ . -1, data = breast_cancer.test[, features])
+```
+
+```{r, echo=TRUE}
+model2<- glm(diagnosis_n ~ radius_worst_ln + radius_mean_ln + radius_se + 
+               perimeter_worst_ln + perimeter_se_ln + perimeter_mean_ln + 
+               area_mean_ln + area_se_ln + area_worst_ln, 
+             data = breast_cancer.train[, c(features, "diagnosis_n")],
+            family = binomial(link = "logit"))
+
+# PREDICTION
+pred.model2 <- predict(model2, newdata = breast_cancer.test, type = "response") 
+```
+
+#### Model 3: \
+This third model uses the same parameters from the previous one, but applying Ridge regularization. Our aim is to compare if the regularization process has influence on the model's predictive performance.
+
+```{r, echo=TRUE}
+features <- c('radius_mean_ln','radius_se','radius_worst_ln', 'perimeter_mean_ln', 
+              'perimeter_se_ln', 'perimeter_worst_ln', 'area_mean_ln', 
+              'area_se_ln', 'area_worst_ln')
+
+X.train <- model.matrix( ~ . -1, data = breast_cancer.train[, features])
+X.test  <- model.matrix( ~ . -1, data = breast_cancer.test[, features])
+
+set.seed(10)
+model2_ridge <- glmnet(X.train, breast_cancer.train$diagnosis_n,
+                                alpha =0,
+                                family = "binomial")
+model2_ridge_cv <- cv.glmnet(X.train, breast_cancer.train$diagnosis_n,
+                                alpha = 0,
+                                type.measure = "class",
+                                lambda = 10^seq(-5, 1, length.out = 100),
+                                family = "binomial",
+                                nfolds = 10)
+#PREDICTION
+pred.model2_ridge <- as.vector(predict(model2_ridge, newx = X.test,
+                                                type = "response",
+                                                s = model2_ridge_cv$lambda.min))
+```
+
+#### Model 4: \
+For this next model, we choose to use all the **variables** that scored high on our **TABLE 1**. We choose to use Lasso regularization because this process is the best for dealing with large amounts of predictors.
+
+```{r, echo=TRUE}
+features <- c('radius_mean_ln', 'radius_se', 'radius_worst_ln', 'perimeter_mean_ln', 
+              'perimeter_se_ln','perimeter_worst_ln','area_mean_ln', 
+              'area_se_ln','area_worst_ln',"compactness_mean",'concavity_mean',
+              "concave.points_mean",'compactness_worst',
+              'concave.points_worst','concavity_worst')
+X.train <- model.matrix( ~ . -1, data = breast_cancer.train[, features])
+X.test  <- model.matrix( ~ . -1, data = breast_cancer.test[, features])
+
+set.seed(10)
+all_high_lasso <- glmnet(X.train, breast_cancer.train$diagnosis_n,
+                             alpha = 1,
+                             family = "binomial")
+all_high_lasso_cv <- cv.glmnet(X.train, breast_cancer.train$diagnosis_n,
+                                   alpha = 1,
+                                   type.measure = "class", 
+                                   lambda = 10^seq(-5, 1, length.out = 100),
+                                   family = "binomial", nfolds = 10)
+#PREDICTION
+pred.all_high_lasso <- as.vector(predict(all_high_lasso,
+                                             newx = X.test,
+                                             type = "response",
+                                             s = all_high_lasso_cv$lambda.min))
+```
+#### Model 5: \
+This fifth model is a decision tree that uses the same predictors as the previous one. This choice derives from the knowledge that decision trees can also be used for feature selection, so our goals are both to evaluate this model's predictive habilities and also to confirm if our choice of predictors based on a visual analysis is correct. 
+
+```{r }
+set.seed(3)
+train.Index <-  sample(1:nrow(breast_cancer), round(0.7*nrow(breast_cancer)), replace = F)
+  breast_cancer.train <- breast_cancer[train.Index,]
+  breast_cancer.test  <- breast_cancer[-train.Index,]
+```
+
+
+```{r, echo=TRUE}
+features <- c('radius_mean_ln', 'radius_se', 'radius_worst_ln',
+              'perimeter_mean_ln', 'perimeter_se_ln', 'perimeter_worst_ln',
+              'area_mean_ln','area_se_ln','area_worst_ln', 
+              "compactness_mean",'concavity_mean','concave.points_mean',
+              'compactness_worst','concave.points_worst','concavity_worst')
+
+dt <- rpart(diagnosis_n ~ ., 
+            data = breast_cancer.train[,c(features,"diagnosis_n")], 
+            method = "class", 
+            parms = list(split = "information"), 
+            model = T) 
+#The following displays the plot of the decision tree
+prp(dt, extra = 106, border.col = 0, box.palette="auto")
+
+#PREDICTION
+pred.dt <- predict(dt, newdata = breast_cancer.test, type = "prob")[, 2]
+```
+
+### Does this model beat the Naive Classifier?
+```{r, echo=TRUE}
+baseline_probability <- sum(breast_cancer.train$diagnosis_n == 1)/nrow(breast_cancer.train)
+pred.baseline <- rep(baseline_probability, nrow(breast_cancer.test))
+```
+#### Naive Classifier evalutation results
+```{r, include=TRUE}
+Accuracy(pred=pred.baseline, real=breast_cancer.test$diagnosis_n)
+sqrt(mean((breast_cancer.test$diagnosis_n - pred.baseline)^2))
+auc(breast_cancer.test$diagnosis_n, pred.baseline)
+```
+#### Model 5 5valuation results
+```{r, include=TRUE}
+Accuracy(pred=pred.dt, real=breast_cancer.test$diagnosis_n)
+sqrt(mean((breast_cancer.test$diagnosis_n - pred.dt)^2))
+auc(breast_cancer.test$diagnosis_n, pred.dt)
+```
+
+Apart from the regular evaluation metrics, we created a naive classifier to see if this model beats it. Based on the results, we can conclude that Model 5 beats the naive classifiers and is therefore relevant for prediction.
+
+#### Model 6 \
+For our last model, we decide to prune the previous decision tree. For this we needed to find the best values for the pruning parameters.
+```{r, eval=FALSE, echo=TRUE}
+parameter_values <- expand.grid("cp" = seq(0.00, 0.01, by = 0.002),
+                                "minsplit" = seq(20, 70, by = 5)) 
+num_folds <- 5
+
+cv_results <- matrix(nrow = nrow(parameter_values), ncol = num_folds)
+
+set.seed(75)
+folds <- cut(1:nrow(breast_cancer.train), breaks = num_folds, labels = F)
+
+for (i in 1:num_folds) {
+  
+  print(paste0(i, "/", num_folds))
+  
+  idx_val <- which(folds == i)     
+  cv_train <- breast_cancer.train[-idx_val,]
+  cv_valid <- breast_cancer.train[ idx_val,]
+  
+  for (j in 1:nrow(parameter_values)) {
+    
+    dt2 <- rpart(diagnosis_n ~ ., 
+            data = breast_cancer.train[,c(features,"diagnosis_n")],
+            method = "class", 
+            parms = list(split = "information"), 
+            cp       = parameter_values$cp[j],     
+            minsplit = parameter_values$minsplit[j]) 
+    
+    pred.dt2 <- predict(dt2, newdata = cv_valid, type = "prob")[,2]
+
+    cv_results[j, i] <- auc(cv_valid$diagnosis_n, pred.dt2, quiet = T)
+  }
+}
+
+parameter_values$mean_auc <- apply(cv_results, 1, mean)
+
+agg_cp <- aggregate(mean_auc ~ cp, data = parameter_values, mean)
+agg_ms <- aggregate(mean_auc ~ minsplit, data = parameter_values, mean)
+
+# training the model with the chosen parameters
+dt2 <- rpart(diagnosis_n ~ .,data = breast_cancer.train[,c(features,"diagnosis_n")], 
+             method = "class",
+        cp = parameter_values$cp[which.max(parameter_values$mean_auc)],
+        minsplit =parameter_values$minsplit[which.max(parameter_values$mean_auc)])
+
+#PREDICTION
+pred.dt2 <- predict(dt2, newdata = breast_cancer.test, type = "prob")[,2]
+```
+
+```{r MODEL 6 DECISION TREE + prunning, include=FALSE}
+parameter_values <- expand.grid("cp" = seq(0.00, 0.01, by = 0.002),
+                                "minsplit" = seq(20, 70, by = 5))   
+
+num_folds <- 5
+
+cv_results <- matrix(nrow = nrow(parameter_values), ncol = num_folds)
+
+set.seed(75)
+folds <- cut(1:nrow(breast_cancer.train), breaks = num_folds, labels = F)
+
+for (i in 1:num_folds) {
+  
+  print(paste0(i, "/", num_folds))
+  
+  idx_val <- which(folds == i)     
+  cv_train <- breast_cancer.train[-idx_val,]
+  cv_valid <- breast_cancer.train[ idx_val,]
+  
+  for (j in 1:nrow(parameter_values)) {
+    
+    dt2 <- rpart(diagnosis_n ~ ., 
+            data = breast_cancer.train[,c(features,"diagnosis_n")],
+            method = "class", 
+            parms = list(split = "information"), 
+            cp       = parameter_values$cp[j],     
+            minsplit = parameter_values$minsplit[j]) 
+    
+    pred.dt2 <- predict(dt2, newdata = cv_valid, type = "prob")[,2]
+
+    cv_results[j, i] <- auc(cv_valid$diagnosis_n, pred.dt2, quiet = T)
+  }
+}
+
+parameter_values$mean_auc <- apply(cv_results, 1, mean)
+parameter_values[order(parameter_values$mean_auc), ]
+parameter_values[which.max(parameter_values$mean_auc), ]
+
+agg_cp <- aggregate(mean_auc ~ cp, data = parameter_values, mean)
+agg_ms <- aggregate(mean_auc ~ minsplit, data = parameter_values, mean)
+
+# plotting AUC by different control parameters  
+par(mfrow = c(1,2))
+plot(y = agg_cp$mean_auc, x = agg_cp$cp, type = "l")
+plot(y = agg_ms$mean_auc, x = agg_ms$minsplit, type = "l")
+
+# training the model with the chosen parameters
+dt2 <- rpart(diagnosis_n ~ .,data = breast_cancer.train[,c(features,"diagnosis_n")], method = "class",
+        cp       = parameter_values$cp[which.max(parameter_values$mean_auc)],
+        minsplit = parameter_values$minsplit[which.max(parameter_values$mean_auc)])
+
+#PREDICTION
+pred.dt2 <- predict(dt2, newdata = breast_cancer.test, type = "prob")[,2]
+auc(breast_cancer.test$diagnosis_n, pred.dt2, quiet = T)
+
+# ranking variables by importance
+as.matrix(dt2$variable.importance, ncol = 1)
+```
+```{r, include=TRUE}
+#The following displays the plot of dt2
+prp(dt2, extra = 106, border.col = 0, box.palette="auto")
+# ranking variables by importance
+as.matrix(dt2$variable.importance, ncol = 1)
+```
+This matrix shows that our first choice of predictors was fairly correct, because the most important predictors on the decision tree are almost the same ones we chose as the ones with highest influence on diagnosis.
+
+# 3. Evaluation
+#### Accuracy comparison
+```{r, include=TRUE}
+Accuracy(pred = pred.model1, real = breast_cancer.test$diagnosis_n)
+Accuracy(pred = pred.model2, real = breast_cancer.test$diagnosis_n)
+Accuracy(pred = pred.model2_ridge, real = y.test)
+Accuracy(pred = pred.all_high_lasso, real = breast_cancer.test$diagnosis_n)
+Accuracy(pred=pred.dt, real=breast_cancer.test$diagnosis_n) 
+Accuracy(pred=pred.dt2, real=breast_cancer.test$diagnosis_n) 
+```
+#### Root Mean Square Error (RMSE)
+```{r, include=TRUE}
+sqrt(mean((breast_cancer.test$diagnosis_n - pred.model1)^2)) 
+sqrt(mean((breast_cancer.test$diagnosis_n - pred.model2)^2)) 
+sqrt(mean((y.test - pred.model2_ridge)^2))
+sqrt(mean((y.test - pred.all_high_lasso)^2)) 
+sqrt(mean((breast_cancer.test$diagnosis_n - pred.dt)^2)) 
+sqrt(mean((breast_cancer.test$diagnosis_n - pred.dt2)^2))
+```
+#### Area Under Curve (AUC)
+```{r, include=TRUE}
+auc(breast_cancer.test$diagnosis_n, pred.model1) 
+auc(breast_cancer.test$diagnosis_n, pred.model2) 
+auc(breast_cancer.test$diagnosis_n, pred.model2_ridge)
+auc(breast_cancer.test$diagnosis_n, pred.all_high_lasso) 
+auc(breast_cancer.test$diagnosis_n, pred.dt)
+auc(breast_cancer.test$diagnosis_n, pred.dt2) 
+```
+
+# 4. Conclusions
+### Best Performing Model  
+To select the best modeling process we need to choose the one who has the highest accuracy; lowest RMSE and highest AUC.
+Analyzing the given values we see that the best three of each evaluation metric are:
+
+Accuracy
+1. Model 6
+2. Model 1, Model 3, Model 4, Model 5 (this four models have the same values)
+
+RMSE:
+1. Model 4
+2. Model 1, Model 2 (same values)
+
+AUC:
+1. Model 4
+2. Model 1
+3. Model 2
+
+No model has coinciding best values for each metric, but Model 4 has the best RMSE and AUC. Therefore we believe Model 4 - Lasso is the best performing model from the ones we built.
+
+
+### Personal estimate  
+We believe that the evaluation metric's values are all significantly good. Even in the cases of the worst performing models, theirs metrics are good enough that we can still consider them to result in good predictions. 
